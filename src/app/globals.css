@@ -22,5 +22,18 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+.auth-shell {
+  background: radial-gradient(circle at 20% 20%, rgba(16, 185, 129, 0.16), transparent 45%),
+    radial-gradient(circle at 80% 70%, rgba(245, 158, 11, 0.18), transparent 40%),
+    #0b1220;
+}
+
+.auth-grid {
+  background-image: linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(circle at center, rgba(0, 0, 0, 0.85) 20%, transparent 70%);
 }

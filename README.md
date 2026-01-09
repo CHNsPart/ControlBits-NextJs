@@ -1,8 +1,11 @@
 This is a Habbit Tracking app created with React(Nextjs).
 
 ## Getting Started
-
-First, run the development server:
+First, install all the requirements:
+```
+npm install
+```
+Next, run the development server:
 
 ```bash
 npm run dev
