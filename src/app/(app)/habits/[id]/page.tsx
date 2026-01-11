@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 
 import { apiDeleteAuth, apiGetAuth, apiPostAuth, apiPutAuth } from "@/lib/api";
 
@@ -15,6 +16,11 @@ type Habit = {
   is_archived: boolean;
   created_at: string;
   updated_at: string;
+};
+
+type HabitResponsePayload = Omit<Habit, "is_archived"> & {
+  is_archived?: boolean;
+  archived?: boolean;
 };
 
 type HabitEntry = {
@@ -59,13 +65,19 @@ export default function HabitDetailPage() {
       setLoading(true);
       setError(null);
       try {
-        const habitResponse = await apiGetAuth<Habit>(`/habits/${habitId}`);
+        const habitResponse = await apiGetAuth<HabitResponsePayload>(
+          `/habits/${habitId}`,
+        );
         if (!active) {
           return;
         }
-        setHabit(habitResponse);
-        setEditName(habitResponse.name || "");
-        setEditDescription(habitResponse.description || "");
+        const normalizedHabit: Habit = {
+          ...habitResponse,
+          is_archived: habitResponse.is_archived ?? habitResponse.archived ?? false,
+        };
+        setHabit(normalizedHabit);
+        setEditName(normalizedHabit.name || "");
+        setEditDescription(normalizedHabit.description || "");
 
         const { start, end } = getMonthRange(monthCursor);
         const entriesResponse = await apiGetAuth<HabitEntry[]>(
@@ -131,7 +143,12 @@ export default function HabitDetailPage() {
   });
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-6 pb-16 pt-14">
+    <motion.div
+      initial={{ opacity: 0, y: 16 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, ease: "easeOut" }}
+      className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 px-6 pb-16 pt-14"
+    >
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="space-y-3">
           <p className="text-xs uppercase tracking-[0.4em] text-slate-400">
@@ -210,14 +227,27 @@ export default function HabitDetailPage() {
         </div>
       </header>
 
-      {error && (
-        <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">
-          {error}
-        </div>
-      )}
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.15, ease: "easeOut" }}
+            className="rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
+          >
+            {error}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
-        <section className="rounded-[32px] border border-white/10 bg-white/5 p-6 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.8)]">
+        <motion.section
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+          className="rounded-[32px] border border-white/10 bg-white/5 p-6 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.8)]"
+        >
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
@@ -298,9 +328,14 @@ export default function HabitDetailPage() {
               </div>
             </>
           )}
-        </section>
+        </motion.section>
 
-        <aside className="flex flex-col gap-6">
+        <motion.aside
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: "easeOut", delay: 0.05 }}
+          className="flex flex-col gap-6"
+        >
           <form
             className="rounded-[28px] border border-white/10 bg-white/5 p-6"
             onSubmit={async (event) => {
@@ -415,36 +450,43 @@ export default function HabitDetailPage() {
                   No entries yet. Mark today to start.
                 </div>
               )}
-              {!loading &&
-                historyItems.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
-                  >
-                    <div>
-                      <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
-                        {new Date(entry.entry_date).toLocaleDateString(undefined, {
-                          month: "short",
-                          day: "2-digit",
-                        })}
-                      </p>
-                      <p className="text-sm font-semibold text-white">
-                        {entry.status === "completed"
-                          ? "Completed"
-                          : "Missed"}
-                      </p>
-                    </div>
-                    <span
-                      className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] ${
-                        entry.status === "completed"
-                          ? "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30"
-                          : "bg-rose-500/15 text-rose-200 ring-1 ring-rose-500/30"
-                      }`}
+              {!loading && (
+                <AnimatePresence initial={false}>
+                  {historyItems.map((entry) => (
+                    <motion.div
+                      key={entry.id}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.15, ease: "easeOut" }}
+                      className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3"
                     >
-                      {entry.status}
-                    </span>
-                  </div>
-                ))}
+                      <div>
+                        <p className="text-xs uppercase tracking-[0.3em] text-slate-400">
+                          {new Date(entry.entry_date).toLocaleDateString(undefined, {
+                            month: "short",
+                            day: "2-digit",
+                          })}
+                        </p>
+                        <p className="text-sm font-semibold text-white">
+                          {entry.status === "completed"
+                            ? "Completed"
+                            : "Missed"}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.25em] ${
+                          entry.status === "completed"
+                            ? "bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30"
+                            : "bg-rose-500/15 text-rose-200 ring-1 ring-rose-500/30"
+                        }`}
+                      >
+                        {entry.status}
+                      </span>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
+              )}
             </div>
           </div>
 
@@ -522,9 +564,9 @@ export default function HabitDetailPage() {
               </button>
             </div>
           </div>
-        </aside>
+        </motion.aside>
       </div>
-    </div>
+    </motion.div>
   );
 }
 

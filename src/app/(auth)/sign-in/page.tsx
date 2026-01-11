@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { apiPost } from "@/lib/api";
 
 type LoginResponse = {
   access_token: string;
+  refresh_token?: string;
   message?: string;
 };
 
@@ -15,9 +16,21 @@ export default function SignInPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const registered = searchParams.get("registered") === "1";
+  const sessionExpired = searchParams.get("reason") === "expired";
   const emailPrefill = searchParams.get("email") ?? "";
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    try {
+      const token = localStorage.getItem("access_token");
+      if (token) {
+        router.replace("/dashboard");
+      }
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [router]);
 
   return (
     <div className="space-y-6">
@@ -36,6 +49,12 @@ export default function SignInPage() {
       {registered && (
         <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
           Account created. Sign in to continue.
+        </div>
+      )}
+
+      {sessionExpired && (
+        <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          Your session expired. Please sign in again.
         </div>
       )}
 
@@ -63,6 +82,9 @@ export default function SignInPage() {
             if (data.access_token) {
               try {
                 localStorage.setItem("access_token", data.access_token);
+                if (data.refresh_token) {
+                  localStorage.setItem("refresh_token", data.refresh_token);
+                }
               } catch {
                 // Ignore storage errors (private mode, disabled storage).
               }

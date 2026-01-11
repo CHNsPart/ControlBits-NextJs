@@ -1,17 +1,29 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { apiPost } from "@/lib/api";
 
 export default function ForgotPasswordSentPage() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const email = searchParams.get("email");
   const [resent, setResent] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    try {
+      const token = localStorage.getItem("access_token");
+      if (token) {
+        router.replace("/dashboard");
+      }
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [router]);
 
   return (
     <div className="space-y-6">

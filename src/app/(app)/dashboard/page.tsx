@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 
-import { apiGetAuth } from "@/lib/api";
+import { apiDeleteAuth, apiGetAuth, apiPostAuth } from "@/lib/api";
 
 type Habit = {
   id: string;
@@ -26,14 +27,65 @@ type HabitEntry = {
   created_at: string;
 };
 
+type HabitsResponse = Habit[] | { habits?: HabitResponsePayload[] };
+
+type HabitResponsePayload = Omit<Habit, "is_archived"> & {
+  is_archived?: boolean;
+  archived?: boolean;
+};
+
+type HabitEntriesResponse = HabitEntry[] | { entries?: HabitEntry[] };
+
+type UndoAction = {
+  entryId: string;
+  status: "completed" | "missed";
+  expiresAt: number;
+  timeoutId: ReturnType<typeof setTimeout>;
+};
+
+function normalizeHabitsResponse(response: HabitsResponse): Habit[] | null {
+  const list = Array.isArray(response)
+    ? response
+    : response.habits == null
+      ? []
+      : Array.isArray(response.habits)
+        ? response.habits
+        : null;
+  if (!list) {
+    return null;
+  }
+
+  return list.map((habit) => ({
+    ...habit,
+    is_archived: habit.is_archived ?? habit.archived ?? false,
+  }));
+}
+
+function normalizeEntriesResponse(
+  response: HabitEntriesResponse,
+): HabitEntry[] | null {
+  if (Array.isArray(response)) {
+    return response;
+  }
+  if (response.entries == null) {
+    return [];
+  }
+  return Array.isArray(response.entries) ? response.entries : null;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileName, setProfileName] = useState<string | null>(null);
   const [habits, setHabits] = useState<Habit[]>([]);
+  const [archivedHabits, setArchivedHabits] = useState<Habit[]>([]);
   const [entriesByHabit, setEntriesByHabit] = useState<
     Record<string, HabitEntry[]>
   >({});
+  const [undoByHabit, setUndoByHabit] = useState<Record<string, UndoAction>>({});
+  const [actionByHabit, setActionByHabit] = useState<Record<string, string>>({});
+  const [now, setNow] = useState(() => Date.now());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,17 +95,17 @@ export default function DashboardPage() {
   > = {
     completed: {
       label: "Completed",
-      pill: "bg-emerald-500/15 text-emerald-200 ring-emerald-500/30",
+      pill: "bg-emerald-500/25 text-emerald-100 ring-emerald-400/50",
       dot: "bg-emerald-500",
     },
     pending: {
       label: "In progress",
-      pill: "bg-amber-500/15 text-amber-200 ring-amber-500/30",
+      pill: "bg-slate-500/20 text-slate-200 ring-white/15",
       dot: "bg-amber-500",
     },
     missed: {
       label: "Missed",
-      pill: "bg-rose-500/15 text-rose-200 ring-rose-500/30",
+      pill: "bg-rose-500/25 text-rose-100 ring-rose-400/50",
       dot: "bg-rose-500",
     },
   };
@@ -74,7 +126,7 @@ export default function DashboardPage() {
       try {
         const [profile, habitsResponse] = await Promise.all([
           apiGetAuth<{ name: string }>("/users/me"),
-          apiGetAuth<Habit[]>("/habits"),
+          apiGetAuth<HabitsResponse>("/habits"),
         ]);
 
         if (!active) {
@@ -82,17 +134,16 @@ export default function DashboardPage() {
         }
 
         setProfileName(profile.name || null);
-        const normalizedHabits = Array.isArray(habitsResponse)
-          ? habitsResponse
-          : habitsResponse == null
-            ? []
-            : null;
+        const normalizedHabits =
+          habitsResponse == null ? [] : normalizeHabitsResponse(habitsResponse);
         if (!normalizedHabits) {
           throw new Error("Habits response is invalid.");
         }
 
         const activeHabits = normalizedHabits.filter((habit) => !habit.is_archived);
+        const archived = normalizedHabits.filter((habit) => habit.is_archived);
         setHabits(activeHabits);
+        setArchivedHabits(archived);
 
         if (activeHabits.length === 0) {
           setEntriesByHabit({});
@@ -102,12 +153,10 @@ export default function DashboardPage() {
         const today = getLocalDateString(new Date());
         const entryPairs = await Promise.all(
           activeHabits.map(async (habit) => {
-            const entriesResponse = await apiGetAuth<HabitEntry[]>(
+            const entriesResponse = await apiGetAuth<HabitEntriesResponse>(
               `/habits/${habit.id}/entries?start_date=${today}&end_date=${today}`,
             );
-            const entries = Array.isArray(entriesResponse)
-              ? entriesResponse
-              : [];
+            const entries = normalizeEntriesResponse(entriesResponse) ?? [];
             return [habit.id, entries] as const;
           }),
         );
@@ -133,12 +182,167 @@ export default function DashboardPage() {
       }
     };
 
+    const handleRefresh = () => {
+      if (document.visibilityState === "visible") {
+        load();
+      }
+    };
+
+    window.addEventListener("focus", handleRefresh);
+    document.addEventListener("visibilitychange", handleRefresh);
     load();
 
     return () => {
       active = false;
+      window.removeEventListener("focus", handleRefresh);
+      document.removeEventListener("visibilitychange", handleRefresh);
     };
   }, []);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (menuRef.current && target && !menuRef.current.contains(target)) {
+        setMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (Object.keys(undoByHabit).length === 0) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [undoByHabit]);
+
+  const handleUndo = async (habitId: string) => {
+    const action = undoByHabit[habitId];
+    if (!action) {
+      return;
+    }
+    window.clearTimeout(action.timeoutId);
+    setActionByHabit((prev) => ({ ...prev, [habitId]: "undo" }));
+    try {
+      await apiDeleteAuth(`/habits/${habitId}/entries/${action.entryId}`);
+      setEntriesByHabit((prev) => ({
+        ...prev,
+        [habitId]: (prev[habitId] ?? []).filter(
+          (entry) => entry.id !== action.entryId,
+        ),
+      }));
+      setUndoByHabit((prev) => {
+        const next = { ...prev };
+        delete next[habitId];
+        return next;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to undo update.");
+    } finally {
+      setActionByHabit((prev) => {
+        const next = { ...prev };
+        delete next[habitId];
+        return next;
+      });
+    }
+  };
+
+  const handleMark = async (habit: Habit, status: "completed" | "missed") => {
+    if (actionByHabit[habit.id]) {
+      return;
+    }
+    setActionByHabit((prev) => ({ ...prev, [habit.id]: status }));
+    setError(null);
+    try {
+      const today = getLocalDateString(new Date());
+      const result = await apiPostAuth<{ id: string }>(`/habits/${habit.id}/entries`, {
+        date: today,
+        status,
+        note: "",
+      });
+      const entryId = result.id;
+      const entry: HabitEntry = {
+        id: entryId,
+        habit_id: habit.id,
+        entry_date: today,
+        status,
+        note: "",
+        created_at: new Date().toISOString(),
+      };
+
+      setEntriesByHabit((prev) => ({
+        ...prev,
+        [habit.id]: [
+          ...(prev[habit.id] ?? []).filter((item) => item.entry_date !== today),
+          entry,
+        ],
+      }));
+
+      setUndoByHabit((prev) => {
+        const existing = prev[habit.id];
+        if (existing) {
+          window.clearTimeout(existing.timeoutId);
+        }
+        const expiresAt = Date.now() + 5000;
+        const timeoutId = window.setTimeout(() => {
+          setUndoByHabit((current) => {
+            const next = { ...current };
+            delete next[habit.id];
+            return next;
+          });
+        }, 5000);
+        return {
+          ...prev,
+          [habit.id]: { entryId, status, expiresAt, timeoutId },
+        };
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to update habit.");
+    } finally {
+      setActionByHabit((prev) => {
+        const next = { ...prev };
+        delete next[habit.id];
+        return next;
+      });
+    }
+  };
+
+  const handleUnarchive = async (habit: Habit) => {
+    if (actionByHabit[habit.id]) {
+      return;
+    }
+    setActionByHabit((prev) => ({ ...prev, [habit.id]: "unarchive" }));
+    setError(null);
+    try {
+      await apiPostAuth(`/habits/${habit.id}/unarchive`, {});
+      setArchivedHabits((prev) => prev.filter((item) => item.id !== habit.id));
+      setHabits((prev) => [{ ...habit, is_archived: false }, ...prev]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to unarchive habit.");
+    } finally {
+      setActionByHabit((prev) => {
+        const next = { ...prev };
+        delete next[habit.id];
+        return next;
+      });
+    }
+  };
 
   const habitStatuses = useMemo(() => {
     const statusMap: Record<string, "completed" | "missed" | "pending"> = {};
@@ -211,7 +415,7 @@ export default function DashboardPage() {
             >
               New habit
             </Link>
-            <div className="relative">
+            <div className="relative" ref={menuRef}>
               <button
                 type="button"
                 onClick={() => setMenuOpen((prev) => !prev)}
@@ -228,46 +432,55 @@ export default function DashboardPage() {
                       .join("") || "U"
                   : "…"}
               </button>
-              {menuOpen && (
-                <div className="absolute right-0 mt-3 w-56 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/90 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.9)] backdrop-blur">
-                  <div className="border-b border-white/10 px-4 py-3">
-                    <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                      Signed in
-                    </p>
-                    <p className="mt-1 text-sm font-semibold text-white">
-                      {profileName ?? "Loading..."}
-                    </p>
-                  </div>
-                  <div className="flex flex-col">
-                    <Link
-                      href="/profile"
-                      className="px-4 py-3 text-sm text-slate-300 transition hover:bg-white/5 hover:text-white"
-                    >
-                      Profile & achievements
-                    </Link>
-                    <Link
-                      href="/settings"
-                      className="px-4 py-3 text-sm text-slate-300 transition hover:bg-white/5 hover:text-white"
-                    >
-                      Account settings
-                    </Link>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        try {
-                          localStorage.removeItem("access_token");
-                        } catch {
-                          // Ignore storage errors.
-                        }
-                        router.push("/sign-in");
-                      }}
-                      className="px-4 py-3 text-left text-sm text-rose-200 transition hover:bg-rose-500/10"
-                    >
-                      Logout
-                    </button>
-                  </div>
-                </div>
-              )}
+              <AnimatePresence>
+                {menuOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -6, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -6, scale: 0.98 }}
+                    transition={{ duration: 0.15, ease: "easeOut" }}
+                    className="absolute right-0 mt-3 w-56 overflow-hidden rounded-2xl border border-white/10 bg-slate-950/90 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.9)] backdrop-blur"
+                  >
+                    <div className="border-b border-white/10 px-4 py-3">
+                      <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
+                        Signed in
+                      </p>
+                      <p className="mt-1 text-sm font-semibold text-white">
+                        {profileName ?? "Loading..."}
+                      </p>
+                    </div>
+                    <div className="flex flex-col">
+                      <Link
+                        href="/profile"
+                        className="px-4 py-3 text-sm text-slate-300 transition hover:bg-white/5 hover:text-white"
+                      >
+                        Profile & achievements
+                      </Link>
+                      <Link
+                        href="/settings"
+                        className="px-4 py-3 text-sm text-slate-300 transition hover:bg-white/5 hover:text-white"
+                      >
+                        Account settings
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          try {
+                            localStorage.removeItem("access_token");
+                            localStorage.removeItem("refresh_token");
+                          } catch {
+                            // Ignore storage errors.
+                          }
+                          router.push("/sign-in");
+                        }}
+                        className="px-4 py-3 text-left text-sm text-rose-200 transition hover:bg-rose-500/10"
+                      >
+                        Logout
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         </header>
@@ -341,14 +554,26 @@ export default function DashboardPage() {
               {!loading &&
                 !error &&
                 habits.map((habit) => {
-                  const tone = statusTone[habitStatuses[habit.id] ?? "pending"];
+                  const status = habitStatuses[habit.id] ?? "pending";
+                  const tone = statusTone[status];
+                  const undoAction = undoByHabit[habit.id];
+                  const secondsLeft = undoAction
+                    ? Math.max(0, Math.ceil((undoAction.expiresAt - now) / 1000))
+                    : 0;
+                  const showActions = status === "pending" && !undoAction;
                   return (
-                    <Link
+                    <motion.div
                       key={habit.id}
-                      href={`/habits/${habit.id}`}
-                      className="flex flex-col gap-4 rounded-3xl border border-white/10 bg-white/5 px-5 py-4 transition hover:border-emerald-400/40 hover:bg-white/10 sm:flex-row sm:items-center sm:justify-between"
+                      layout
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      className="flex flex-col gap-4 rounded-3xl border border-white/10 bg-white/5 px-5 py-4 transition hover:border-emerald-400/40 hover:bg-white/10 sm:flex-row sm:items-stretch sm:justify-between"
                     >
-                      <div className="flex items-center gap-4">
+                      <Link
+                        href={`/habits/${habit.id}`}
+                        className="flex items-center gap-4"
+                      >
                         <div className="flex h-12 w-12 flex-col items-center justify-center gap-1 rounded-2xl bg-white/10 text-white shadow-sm">
                           <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-300">
                             {new Date(habit.created_at).toLocaleString(undefined, {
@@ -371,19 +596,70 @@ export default function DashboardPage() {
                             </p>
                           )}
                         </div>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-3">
+                      </Link>
+                      <div
+                        className={`flex flex-wrap items-center gap-3 ${
+                          showActions ? "" : "justify-center"
+                        } sm:self-stretch sm:items-center sm:justify-end`}
+                      >
                         <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">
                           {habit.current_streak} day streak
                         </span>
-                        <span
+                        <motion.span
+                          layout
                           className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] ring-1 ${tone.pill}`}
                         >
                           <span className={`h-2 w-2 rounded-full ${tone.dot}`} />
                           {tone.label}
-                        </span>
+                        </motion.span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <AnimatePresence mode="wait" initial={false}>
+                            {showActions && (
+                              <motion.div
+                                key="actions"
+                                initial={{ opacity: 0, y: -6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -6 }}
+                                transition={{ duration: 0.15, ease: "easeOut" }}
+                                className="flex flex-wrap items-center gap-2"
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleMark(habit, "completed")}
+                                  disabled={Boolean(actionByHabit[habit.id])}
+                                  className="min-w-[96px] rounded-full border border-emerald-400/50 bg-transparent px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-200 transition hover:border-emerald-300/70 hover:text-emerald-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                >
+                                  Complete
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleMark(habit, "missed")}
+                                  disabled={Boolean(actionByHabit[habit.id])}
+                                  className="min-w-[96px] rounded-full border border-rose-400/50 bg-transparent px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-rose-200 transition hover:border-rose-300/70 hover:text-rose-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                >
+                                  Missed
+                                </button>
+                              </motion.div>
+                            )}
+                            {undoAction && (
+                              <motion.button
+                                key="undo"
+                                type="button"
+                                onClick={() => handleUndo(habit.id)}
+                                disabled={Boolean(actionByHabit[habit.id])}
+                                initial={{ opacity: 0, y: -6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: -6 }}
+                                transition={{ duration: 0.15, ease: "easeOut" }}
+                                className="rounded-full border border-amber-400/50 bg-amber-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-amber-200 transition hover:border-amber-300/70 disabled:cursor-not-allowed disabled:opacity-70"
+                              >
+                                Undo ({secondsLeft}s)
+                              </motion.button>
+                            )}
+                          </AnimatePresence>
+                        </div>
                       </div>
-                    </Link>
+                    </motion.div>
                   );
                 })}
             </div>
@@ -473,6 +749,67 @@ export default function DashboardPage() {
                       </div>
                     );
                   })}
+              </div>
+            </div>
+
+            <div className="rounded-[32px] border border-white/10 bg-white/5 p-6 shadow-[0_24px_80px_-48px_rgba(15,23,42,0.8)]">
+              <p className="text-xs uppercase tracking-[0.3em] text-slate-500">
+                Archived
+              </p>
+              <h3 className="mt-2 text-xl font-semibold text-white">
+                Past habits
+              </h3>
+              <div className="mt-5 space-y-3">
+                {loading && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-slate-400">
+                    Loading archived habits...
+                  </div>
+                )}
+                {!loading && error && (
+                  <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 px-4 py-4 text-sm text-rose-200">
+                    {error}
+                  </div>
+                )}
+                {!loading && !error && archivedHabits.length === 0 && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 text-sm text-slate-400">
+                    No archived habits yet.
+                  </div>
+                )}
+                {!loading && !error && (
+                  <AnimatePresence initial={false}>
+                    {archivedHabits.map((habit) => (
+                      <motion.div
+                        key={habit.id}
+                        layout
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -8 }}
+                        transition={{ duration: 0.18, ease: "easeOut" }}
+                        className="flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200 transition hover:border-white/20 hover:bg-white/10"
+                      >
+                        <Link
+                          href={`/habits/${habit.id}`}
+                          className="font-semibold text-white"
+                        >
+                          {habit.name}
+                        </Link>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                            Archived
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handleUnarchive(habit)}
+                            disabled={Boolean(actionByHabit[habit.id])}
+                            className="rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-emerald-200 transition hover:border-emerald-300/60 disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            Unarchive
+                          </button>
+                        </div>
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                )}
               </div>
             </div>
           </div>

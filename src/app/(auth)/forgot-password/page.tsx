@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { apiPost } from "@/lib/api";
 
@@ -10,6 +10,17 @@ export default function ForgotPasswordPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+
+  useEffect(() => {
+    try {
+      const token = localStorage.getItem("access_token");
+      if (token) {
+        router.replace("/dashboard");
+      }
+    } catch {
+      // Ignore storage errors.
+    }
+  }, [router]);
 
   return (
     <div className="space-y-6">
